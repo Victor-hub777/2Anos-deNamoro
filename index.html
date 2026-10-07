@@ -200,6 +200,13 @@
     background-color:var(--quartzo-suave);
     background-image:radial-gradient(rgba(192,154,79,.22) 1px,transparent 1.2px);
     background-size:22px 22px;
+    .pick{display:flex;gap:.8rem;justify-content:center;flex-wrap:wrap;margin:-1.5rem 0 2.5rem}
+.btn-soft{
+  font-family:var(--ui);font-weight:500;font-size:.98rem;color:var(--vinho);background:#fffdfa;
+  border:1px solid var(--ouro);border-radius:999px;padding:.7rem 1.4rem;cursor:pointer;
+}
+.btn-soft:hover{background:var(--quartzo-suave)}
+.btn-soft[hidden]{display:none}
   }
   .polaroids{display:grid;grid-template-columns:repeat(4,1fr);gap:2.6rem 1.8rem;padding:.8rem .4rem}
   .polaroid{
@@ -229,6 +236,7 @@
     .polaroid{padding:8px 8px 10px}
     .cap{font-size:1.2rem;padding-top:.5rem}
     .photo::after{font-size:1.1rem}
+    
   }
 
   /* Lightbox */
@@ -552,6 +560,11 @@
       <h2>Mural de lembranças</h2>
       <p>Toque em uma foto para vê-la em tamanho grande.</p>
     </header>
+    <div class="pick reveal">
+  <button class="btn-soft" id="pickBtn" type="button">Escolher fotos da galeria</button>
+  <button class="btn-soft" id="clearBtn" type="button" hidden>Voltar às fotos originais</button>
+  <input type="file" id="pickInput" accept="image/*" multiple hidden>
+</div>
     <div class="polaroids" id="polaroids"></div>
   </div>
 </section>
@@ -829,34 +842,113 @@ document.querySelectorAll('[data-sign]').forEach(n => { n.textContent = CONFIG.y
 (function gallery() {
   const grid = $('#polaroids');
   const rot = [-3, 2, -1.5, 3.2, -2.4, 1.6, -3.2, 2.4];
+  const original = CONFIG.gallery.map(g => ({ ...g }));
+  let photos = original.map(g => ({ ...g }));
+  let urls = [];
 
-  CONFIG.gallery.forEach((g, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'polaroid reveal';
-    b.style.setProperty('--r', (rot[i % rot.length]) + 'deg');
-    b.style.setProperty('--d', ((i % 4) * 0.08) + 's');
-    b.setAttribute('aria-label', 'Abrir foto: ' + (g.caption || 'lembrança ' + (i + 1)));
+  /* ----- mural ----- */
+  function render(instant) {
+    grid.innerHTML = '';
+    photos.forEach((g, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'polaroid reveal' + (instant ? ' in' : '');
+      b.style.setProperty('--r', (rot[i % rot.length]) + 'deg');
+      b.style.setProperty('--d', ((i % 4) * 0.08) + 's');
+      b.setAttribute('aria-label', 'Abrir foto: ' + (g.caption || 'lembrança ' + (i + 1)));
 
-    const ph = document.createElement('span');
-    ph.className = 'photo';
-    ph.dataset.hint = 'Sua foto aqui';
-    const img = document.createElement('img');
-    img.src = g.src;
-    img.alt = '';
-    img.loading = 'lazy';
-    img.onerror = () => { img.style.display = 'none'; };
-    ph.appendChild(img);
+      const ph = document.createElement('span');
+      ph.className = 'photo';
+      ph.dataset.hint = 'Sua foto aqui';
+      const img = document.createElement('img');
+      img.src = g.src;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.onerror = () => { img.style.display = 'none'; };
+      ph.appendChild(img);
 
-    const cap = document.createElement('span');
-    cap.className = 'cap';
-    cap.textContent = g.caption || '';
+      const cap = document.createElement('span');
+      cap.className = 'cap';
+      cap.textContent = g.caption || '';
 
-    b.append(ph, cap);
-    b.addEventListener('click', () => open(i, b));
-    grid.appendChild(b);
+      b.append(ph, cap);
+      b.addEventListener('click', () => open(i, b));
+      grid.appendChild(b);
+    });
+  }
+
+  /* ----- escolher fotos da galeria (salvas no navegador) ----- */
+  const openDB = () => new Promise((res, rej) => {
+    const r = indexedDB.open('mural-fotos', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('fotos');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  async function saveFiles(files) {
+    try {
+      const d = await openDB();
+      await new Promise((res, rej) => {
+        const tx = d.transaction('fotos', 'readwrite');
+        const s = tx.objectStore('fotos');
+        s.clear();
+        files.forEach((f, i) => s.put(f, i));
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+    } catch (e) { /* sem armazenamento: as fotos valem só até fechar a página */ }
+  }
+  async function loadFiles() {
+    try {
+      const d = await openDB();
+      return await new Promise((res, rej) => {
+        const r = d.transaction('fotos').objectStore('fotos').getAll();
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+    } catch (e) { return []; }
+  }
+  async function clearFiles() {
+    try {
+      const d = await openDB();
+      await new Promise(res => {
+        const tx = d.transaction('fotos', 'readwrite');
+        tx.objectStore('fotos').clear();
+        tx.oncomplete = res;
+      });
+    } catch (e) {}
+  }
+
+  const pickBtn = $('#pickBtn'), pickInput = $('#pickInput'), clearBtn = $('#clearBtn');
+
+  function useFiles(files) {
+    urls.forEach(u => URL.revokeObjectURL(u));
+    urls = files.map(f => URL.createObjectURL(f));
+    photos = urls.map(u => ({ src: u, caption: '' }));
+    render(true);
+    clearBtn.hidden = false;
+  }
+
+  pickBtn.addEventListener('click', () => pickInput.click());
+  pickInput.addEventListener('change', async e => {
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/')).slice(0, 12);
+    e.target.value = '';
+    if (!files.length) return;
+    await saveFiles(files);
+    useFiles(files);
+  });
+  clearBtn.addEventListener('click', async () => {
+    await clearFiles();
+    urls.forEach(u => URL.revokeObjectURL(u));
+    urls = [];
+    photos = original.map(g => ({ ...g }));
+    render(true);
+    clearBtn.hidden = true;
   });
 
+  render(false);
+  loadFiles().then(files => { if (files.length) useFiles(files); });
+
+  /* ----- lightbox ----- */
   const lb = $('#lb'), lbImg = $('#lbImg'), lbCap = $('#lbCap');
   const btnClose = $('#lbClose'), btnPrev = $('#lbPrev'), btnNext = $('#lbNext');
   let idx = 0, opener = null;
@@ -864,9 +956,9 @@ document.querySelectorAll('[data-sign]').forEach(n => { n.textContent = CONFIG.y
   lbImg.onerror = () => { lbImg.style.display = 'none'; };
 
   function show(i) {
-    const n = CONFIG.gallery.length;
+    const n = photos.length;
     idx = (i + n) % n;
-    const g = CONFIG.gallery[idx];
+    const g = photos[idx];
     lbCap.textContent = g.caption || '';
     lbImg.style.display = '';
     lbImg.alt = g.caption || '';
